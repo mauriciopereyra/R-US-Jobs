@@ -1,0 +1,254 @@
+---
+title: "US Jobs"
+author: "Mauricio"
+date: '2022-08-01'
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+In this project we want to evaluate what are the best jobs in US job market. For doing that we will use a sample dataset from Kaggle that was scraped from Monster.com
+
+First lets read the file
+
+```{r}
+dataset <- read.csv("monster_com-job_sample.csv")
+```
+
+Lets import needed libraries
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(stringr)
+```
+
+Check the dataset contents
+
+```{r}
+head(dataset$job_title)
+```
+
+Check dimensions of the data frame
+
+```{r}
+dim(dataset)
+```
+
+Check if there are columns containing NA values
+
+```{r}
+colSums(is.na(dataset))
+```
+
+Check column names
+
+```{r}
+colnames(dataset)
+```
+
+We do not need all these columns, so we will only select the relevant ones.
+
+```{r}
+dataset <- select(dataset,job_title,job_type,salary,sector)
+```
+
+Check datatypes
+
+```{r}
+str(dataset)
+```
+
+As we can see all of them are character type (strings). But salary should be numeric. Soon we will have to clean this column to convert it to numeric and be able to make comparisons and stats.
+
+```{r}
+head(dataset$salary)
+```
+
+We can see that some records salaries are empty. We will remove all leading and trailing spaces and discard those empty salaries.
+
+```{r}
+dataset$salary <- str_trim(dataset$salary)
+dataset <- dataset[dataset$salary != "",]
+```
+
+Now we only have records with salaries
+
+```{r}
+dataset <- dataset[order(dataset$salary),]
+head(dataset$salary)
+```
+
+We do not want the salaries with strings. We only want to keep the salaries expressed in numbers. So we will discard salaries with no numbers. For doing this we will use regular expressions.
+
+```{r}
+dataset <- dataset[grepl("\\d+", dataset$salary),]
+```
+
+Lets create a function to analyze each salary record. We need to differentiate between yearly, monthly and hourly salaries. And then convert the character to numeric field. I will keep the raw salary field and create a new one for the cleaned salary. So we can always check if the output salary is coherent with the input raw salary field.
+
+```{r}
+
+analyze_salary <- function (dataset){
+  dataset$cleaned_salary <- as.numeric(gsub(",","",str_extract(dataset$salary,"[\\d,.]+")))
+  dataset$salary_type <- str_match(dataset$salary,"/(hour|week|month|year)")[,2]
+  #print(dataset[c("salary","cleaned_salary","salary_type")])
+  return(dataset)
+  }
+dataset <- analyze_salary(dataset)
+```
+
+Some records did not enter a salary or they entered 0.00 as salary. So we will discard those records.
+
+```{r}
+dataset <- dataset[dataset$cleaned_salary != 0 & !is.na(dataset$cleaned_salary),]
+```
+
+We will do the same with the salary type column. We will discard the records that did not specify if the salary was hourly, weekly, monthly or yearly.
+
+```{r}
+dataset <- dataset[!is.na(dataset$salary_type),]
+```
+
+Lets check if there are still any NA (Not available) field on any of those 2 columns.
+
+```{r}
+sum(is.na(dataset$cleaned_salary))
+sum(is.na(dataset$salary_type))
+```
+
+Salaries are clean now. But I will create a column for yearly salary, so we can compare all jobs, no matter their ad was not with yearly salary.
+
+```{r}
+dataset <- mutate(dataset, yearly_salary = case_when(
+  dataset$salary_type == 'year' ~ dataset$cleaned_salary,
+  dataset$salary_type == 'month' ~ dataset$cleaned_salary * 12,
+  dataset$salary_type == 'week' ~ dataset$cleaned_salary * 52,
+  dataset$salary_type == 'hour' ~ dataset$cleaned_salary * 40 * 52
+)
+  )
+```
+
+Let's remove some outliers that I can see at a glance.
+
+```{r}
+dataset <- dataset[dataset$yearly_salary > 6000 & dataset$yearly_salary < 300000,]
+```
+
+We will check what are the top 10 best paid job ads in monster.us
+
+```{r}
+print(slice_max(dataset,dataset$yearly_salary,n = 10)[,c(1,9)])
+```
+
+We can see that there are duplicates in our data. We need to discard them and keep unique records.
+
+```{r}
+dataset <- distinct(dataset)
+```
+
+Now we check top 10 salaries jobs, and we see there are no duplicates.
+
+```{r}
+print(slice_max(dataset,dataset$yearly_salary,n = 10)[,c(1,9)])
+```
+
+Lowest 10 salaries
+
+```{r}
+print(slice_min(dataset,dataset$yearly_salary,n = 10)[,c(1,9)])
+```
+
+Now can start to analyze the sectors Let's take a look at some of the job sectors available.
+
+```{r}
+head(levels(as.factor(dataset$sector)))
+```
+
+We will create another dataset for analyzing the sectors.
+
+```{r}
+sectors <- dataset[dataset$sector != "",] %>%
+  group_by(sector) %>%
+  summarise(count = n(), mean_salary = mean(cleaned_salary))
+```
+
+Let's check what are the most demanded sectors.
+
+```{r}
+print(slice_max(sectors,sectors$count,n = 5))
+```
+
+Best paid sectors (with more than 1 occurrence)
+
+```{r}
+print(slice_max(sectors[sectors$count > 1,],sectors[sectors$count > 1,]$mean_salary,n = 5))
+```
+
+I want to order both jobs and sectors datasets by best paid
+
+```{r}
+dataset <- dataset[order(-dataset$yearly_salary),]
+sectors <- sectors[order(-sectors$mean_salary),]
+```
+
+Let's create graphs for the highest paid jobs and sectors.
+
+```{r}
+ggplot(dataset[1:5,]) + 
+  geom_col(aes(yearly_salary,reorder(job_title, yearly_salary),fill=palette(rainbow(5)))) +
+  theme(legend.position = "none") +
+  labs(x = "Salary per year", y = "Job") +
+  geom_text(aes(x=35000,y=job_title,
+                label=sprintf("$%.2f",yearly_salary)
+                )
+            )
+
+```
+
+```{r}
+ggplot(sectors[sectors$count > 1,][1:5,]) + 
+  geom_col(aes(mean_salary,
+               reorder(str_sub(sector,1,51), mean_salary),
+               fill=palette(rainbow(5)))) +
+  theme(legend.position = "none") +
+  labs(x = "Average salary", y = "Job") +
+  geom_text(aes(x=mean_salary-14000,y=str_sub(sector,1,51),
+                label=sprintf("$%.2f",mean_salary)
+                )
+            )
+
+```
+
+Now I want to know what are the top 10 most sought after skills in the 500 highest paid jobs
+
+```{r}
+skills <- dataset[1:500,] %>%
+    select('skills' = 1) %>%
+    separate_rows(skills, sep = " ") %>%
+    group_by(skills) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count))
+
+top_n(skills,n = 20)
+```
+
+Lets remove some common words that are not skills.
+
+```{r}
+skills <- skills[!skills$skills %in% c("in","Job","-","Dallas","/","Houston","of","Chicago","Cincinnati","New"),]
+top_n(skills,n = 10)
+```
+
+Let's plot this info
+
+```{r}
+ggplot(data = skills[1:10,]) + 
+  geom_point(mapping = aes(y = count, 
+                         x = reorder(skills,count),
+                         fill = skills),
+           stat='identity') +
+  labs(title = "Most sought after skills in top 500 jobs", y = "Times", x = "Skill") +
+  theme(legend.position = "none")
+```
